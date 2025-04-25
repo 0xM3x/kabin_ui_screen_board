@@ -11,13 +11,19 @@ typedef struct {
   float gaz;
   float nem;
   int doluluk;
+  bool show_press_screen;
 } struct_message;
 
 struct_message incomingData;
 
+lv_obj_t* currentScreen = NULL;             // tracks current screen
+unsigned long lastScreenSwitchTime = 0;     // tracks last time we switched
+
 TFT_eSPI tft = TFT_eSPI();
 
-#define LVGL_TICK_PERIOD 20
+#define LVGL_TICK_PERIOD 5
+const unsigned long pressScreenDuration = 20000; // 20 seconds
+bool animatingBar = false;
 
 
 void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
@@ -47,32 +53,31 @@ void animate_arc_value(int new_value) {
   current_val = new_value;
 }
 
-// When ESP-NOW data is received
 void onDataReceive(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   if (len == sizeof(struct_message)) {
     memcpy(&incomingData, data, len);
 
-    int distance = constrain(incomingData.doluluk, 0, 110);
+    // Update arc
+    int distance = constrain(incomingData.doluluk, 25, 110);
     int percentage = map(distance, 25, 110, 100, 0);
-
     animate_arc_value(percentage);
+    lv_obj_invalidate(ui_Arc2);
 
-
-    // debug
-    Serial.printf("📡 Distance: %d cm → %d%%\n", distance, percentage);
-    Serial.printf("📥 Received data from: %02X:%02X:%02X:%02X:%02X:%02X\n",  
-      info->src_addr[0], info->src_addr[1], info->src_addr[2],
-      info->src_addr[3], info->src_addr[4], info->src_addr[5]);
-
-    Serial.print("📦 Payload (bytes): ");
-    Serial.println(len);
+    // If message requests screen switch
+    if (incomingData.show_press_screen && currentScreen != ui_ScreenPress) {
+      lv_scr_load(ui_ScreenPress);
+      currentScreen = ui_ScreenPress;
+      lastScreenSwitchTime = millis();
+      animatingBar = true;
+      lv_bar_set_value(ui_Pressbar, 0, LV_ANIM_OFF); // reset
+    }
   }
 }
 
 
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(115200); 
   tft.begin();
   tft.setRotation(1);  // Adjust based on CrowPanel orientation
 
@@ -92,7 +97,7 @@ void setup() {
 
   ui_init();
   lv_scr_load(ui_Screenrate);  // Only load Screenrate
-
+  currentScreen = ui_Screenrate;
   
 
   WiFi.mode(WIFI_STA);
@@ -122,8 +127,24 @@ void setup() {
 }
 
 void loop() {
-  lv_tick_inc(5);
   lv_timer_handler();
-  delay(5);
+  lv_tick_inc(LVGL_TICK_PERIOD);
+  delay(LVGL_TICK_PERIOD);
+
+
+  if (currentScreen == ui_ScreenPress) {
+    unsigned long elapsed = millis() - lastScreenSwitchTime;
+
+    if (elapsed < pressScreenDuration && animatingBar) {
+      int barVal = map(elapsed, 0, pressScreenDuration, 0, 100);
+      lv_bar_set_value(ui_Pressbar, barVal, LV_ANIM_ON);
+    }
+
+    if (elapsed >= pressScreenDuration) {
+      lv_scr_load(ui_Screenrate);
+      currentScreen = ui_Screenrate;
+      animatingBar = false;
+    }
+  }
 
 }
